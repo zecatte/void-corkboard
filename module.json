@@ -1,0 +1,13 @@
+{
+  "id": "void-corkboard",
+  "title": "Void Corkboard",
+  "description": "A detective corkboard for the party: pin journals, handouts, characters, Party Notes and index cards to cork, tie them together with labelled red string, shared live. Players can use it with no Keeper online. All data is stored in the world, never in the module folder.",
+  "version": "0.1.0",
+  "compatibility": { "minimum": "13", "verified": "14" },
+  "authors": [{ "name": "zecatte" }],
+  "esmodules": ["scripts/corkboard.js"],
+  "styles": ["styles/corkboard.css"],
+  "url": "https://github.com/zecatte/void-corkboard",
+  "manifest": "https://raw.githubusercontent.com/zecatte/void-corkboard/main/module.json",
+  "download": "https://raw.githubusercontent.com/zecatte/void-corkboard/main/void-corkboard.zip"
+}
