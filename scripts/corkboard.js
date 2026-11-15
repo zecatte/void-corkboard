@@ -3,32 +3,124 @@
 // (flags.void-corkboard.cards.<id> / .strings.<id>), one key each, so two players editing at once do not overwrite each other.
 // Cards only point at their source (uuid, Party Note id, image path); nothing is copied. Nothing is stored in the module folder.
 // Players own their boards, so no Keeper needs to be online. Reuses the Party Notes macro data (flags.world on its journals).
+/** The module id. It is also the key all of this module's saved values sit under on a board. @type {string} */
 const MOD = "void-corkboard";
+/** Name of the journal folder that holds all boards. @type {string} */
 const FOLDER = "Corkboards";
-const PN = "world"; // Party Notes flag scope
+/** The flag scope the Party Notes macro saves its data under. @type {string} */
+const PN = "world";
+/** Name of the Party Notes journal that stores Keeper-approved links. @type {string} */
 const PN_LINKS = "Party Notes: Links";
+/**
+ * Shortcut to Foundry's document ownership level constants.
+ *
+ * @returns {object} CONST.DOCUMENT_OWNERSHIP_LEVELS, with the numbers NONE (0), LIMITED (1), OBSERVER (2) and OWNER (3).
+ */
 const L = () => CONST.DOCUMENT_OWNERSHIP_LEVELS;
+/**
+ * Makes text safe to place inside HTML so nothing typed by a player can be run as markup.
+ *
+ * @param {*} s Any value. null and undefined become an empty string; other values are converted to text.
+ * @returns {string} The text with HTML special characters escaped.
+ */
 const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
+/** Sticky-note colours by character, matching the Party Notes macro. @type {Object<string,string>} */
 const PAPER = { guifen: "#bfe3c0", amelia: "#fff3a0", mercy: "#bcd9f5" };
+/**
+ * Picks the sticky-note colour for a writer, by character name, matching the Party Notes macro colours.
+ *
+ * @param {string} name A character or user name. If it contains guifen, amelia or mercy (any capitals) that character's colour is used.
+ * @returns {string} A hex colour: green for Guifen, yellow for Amelia, blue for Mercy, orange for anyone else.
+ */
 const paperFor = (name) => { const k = Object.keys(PAPER).find((k) => (name ?? "").toLowerCase().includes(k)); return k ? PAPER[k] : "#ffd9a8"; };
+/**
+ * Gives a card a small steady tilt so the board looks hand-pinned. The same id always gets the same tilt.
+ *
+ * @param {string} id The card id, or any other text used as a seed.
+ * @returns {number} A tilt in degrees between -2.5 and +2.4.
+ */
 const rotOf = (id) => { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) % 997; return ((h % 50) - 25) / 10; };
+/**
+ * Gets the name a player signs their cards with.
+ *
+ * @param {User} user A Foundry user.
+ * @returns {string} The name of the user's assigned character, or the user name if they have none.
+ */
 const who = (user) => user.character?.name ?? user.name;
+/** Card widths in board units for the three sizes (small, medium, large). @type {number[]} */
 const WIDTHS = [150, 210, 300];
+/** Stamps a card can cycle through; the empty one means no stamp. @type {string[]} */
 const STAMPS = ["", "?", "Suspect", "Solved", "Dead end"];
+/** String colours by name. Gold is only used for Keeper-approved links. @type {Object<string,string>} */
 const COLORS = { red: "#b01818", white: "#efe9da", blue: "#2c5fa8", green: "#2f7d3a", gold: "#c9a227" };
+/** Kinds of document that can be dropped onto the board from the sidebar. @type {string[]} */
 const DOC_TYPES = ["JournalEntry", "JournalEntryPage", "Actor", "Item"];
 
 // ---------- boards ----------
+/**
+ * Reads one of this module's saved values from a document. It reads the raw flags, so it also works before the module is fully active.
+ *
+ * @param {Document|null} doc The document to read from, normally a board journal.
+ *   May be null or undefined.
+ * @param {string} key The saved value to read: "board", "cards", "strings" or "locked".
+ * @returns {*} The saved value, or undefined if there is none.
+ */
 const F = (doc, key) => doc?.flags?.[MOD]?.[key];
+/**
+ * Tells whether a journal is a corkboard.
+ *
+ * @param {JournalEntry} j The journal to check.
+ * @returns {boolean} True if the journal is a corkboard.
+ */
 const isBoard = (j) => !!F(j, "board");
+/**
+ * Lists the boards the current user may see: the Party Board, their own private board, and Keeper boards if they are a Keeper.
+ *
+ * @returns {JournalEntry[]} The boards, sorted Party Board first, then private boards, then Keeper boards, then by name.
+ */
 const boards = () => game.journal.contents.filter((j) => isBoard(j) && j.testUserPermission(game.user, "OBSERVER"))
   .sort((a, b) => kindRank(a) - kindRank(b) || a.name.localeCompare(b.name));
+/**
+ * Gives the sort position of a board by its kind.
+ *
+ * @param {JournalEntry} j A board journal.
+ * @returns {number} 0 for party, 1 for private, 2 for keeper, 3 for anything else.
+ */
 const kindRank = (j) => ({ party: 0, private: 1, keeper: 2 }[F(j, "board")?.kind] ?? 3);
+/**
+ * Turns a saved map of cards or strings into a plain list, skipping ones that were removed.
+ *
+ * @param {Object<string,Object>|undefined} obj A map of id to card or string, as saved on the board.
+ * @returns {Object[]} The cards or strings that still exist.
+ */
 const live = (obj) => Object.values(obj ?? {}).filter((v) => v && v.id && !v.dead);
+/**
+ * Lists the cards on a board.
+ *
+ * @param {JournalEntry} b The board.
+ * @returns {Object[]} The board's cards. Each has id, type, x, y, size, stamp, who and type-specific fields.
+ */
 const cardsOf = (b) => live(F(b, "cards"));
+/**
+ * Lists the strings (links between two cards) on a board.
+ *
+ * @param {JournalEntry} b The board.
+ * @returns {Object[]} The board's strings. Each has id, a and b (the two card ids), label, color and who.
+ */
 const stringsOf = (b) => live(F(b, "strings"));
+/**
+ * Tells whether the current user may change a board. The Keeper always may. Players need ownership and the board must not be locked.
+ *
+ * @param {JournalEntry|null} b The board.
+ * @returns {boolean} True if the user can add, move, tie or remove things on this board.
+ */
 const canEdit = (b) => b && b.isOwner && (game.user.isGM || !F(b, "locked"));
 
+/**
+ * Creates what the module needs when the world loads: the "Corkboards" folder, one shared Party Board, and one private board for each player. It does nothing if they already exist. Only the first online Keeper runs it, so players do not duplicate it.
+ *
+ * @returns {Promise<void>} Resolves when the setup is done.
+ */
 async function ensureSetup() {
   if (!game.users.activeGM?.isSelf) return;
   let folder = game.folders.find((f) => f.type === "JournalEntry" && f.name === FOLDER);
@@ -45,6 +137,13 @@ async function ensureSetup() {
 }
 
 // Remove keys from a flag map. Tries Foundry's "-=" removal, and falls back to a tombstone if that did not take.
+/**
+ * Removes cards or strings from a board. It uses Foundry's deletion marker, and if that does not take effect it marks the entry as dead so it stops showing.
+ *
+ * @param {JournalEntry} board The board to change.
+ * @param {Array<[string,string]>} pairs The entries to remove, each as [map, id], where map is "cards" or "strings" and id is the entry's id.
+ * @returns {Promise<void>} Resolves when the board is updated.
+ */
 async function removeKeys(board, pairs) {
   const upd = {}, Del = foundry.data?.operators?.ForcedDeletion;
   for (const [map, id] of pairs) { if (Del) upd[`flags.${MOD}.${map}.${id}`] = new Del(); else upd[`flags.${MOD}.${map}.-=${id}`] = null; }
@@ -58,8 +157,24 @@ async function removeKeys(board, pairs) {
 }
 
 // ---------- Party Notes data (read-only here, except link suggestions) ----------
+/**
+ * Finds the Party Notes macro's per-player journals, which hold each player's notes and link suggestions.
+ *
+ * @returns {JournalEntry[]} The "Party Notes by <name>" journals.
+ */
 const outboxes = () => game.journal.contents.filter((j) => j.getFlag(PN, "outboxFor"));
+/**
+ * Tells whether the current user may see a journal, or at least one of its pages.
+ *
+ * @param {JournalEntry|null} entry The journal to check.
+ * @returns {boolean} True if the user has Observer access to the journal or to any of its pages.
+ */
 const canSeeEntry = (entry) => entry && (entry.testUserPermission(game.user, "OBSERVER") || entry.pages.some((p) => p.testUserPermission(game.user, "OBSERVER")));
+/**
+ * Collects every Party Note the current user is allowed to see, so notes never reveal journals the player cannot open.
+ *
+ * @returns {Object[]} Notes, newest first. Each is the saved note (id, uuid, pageId, pageName, who, date, html, ts) plus entry (the journal) and box (the journal that stores the note).
+ */
 function allNotes() {
   const out = [];
   for (const j of outboxes()) for (const n of j.getFlag(PN, "notes") ?? []) {
@@ -68,10 +183,28 @@ function allNotes() {
   }
   return out.sort((a, b) => b.ts - a.ts);
 }
+/**
+ * Reads the links the Keeper approved in Party Notes.
+ *
+ * @returns {Object[]} Approved links. Each has id, a and b (journal uuids), reason and who.
+ */
 const approvedLinks = () => game.journal.getName(PN_LINKS)?.getFlag(PN, "approved") ?? [];
+/**
+ * Tells whether a journal is storage for the Party Notes macro, so the corkboard buttons are not added to it.
+ *
+ * @param {JournalEntry} j The journal to check.
+ * @returns {boolean} True for a "Party Notes by ..." journal or the "Party Notes: Links" journal.
+ */
 const isPNJournal = (j) => !!j.getFlag(PN, "outboxFor") || j.name === PN_LINKS;
 
 // ---------- what a card shows to this viewer ----------
+/**
+ * Works out what a card shows to the current user. Cards only point at their source, so this looks the source up each time and checks permission. If the user may not see it, the card is sealed.
+ *
+ * @param {Object} card A card saved on a board.
+ *   type is "doc" (journal, page, actor or item), "note" (Party Note), "text" (index card) or "image".
+ * @returns {Object} One of: {sealed:true}; or {kind, ...} where kind is "index", "photo", "paper" or "sticky" and the other fields (title, sub, img, snip, text, color, note, entry, entryUuid) are what to draw. It may include open(), a function that opens the source.
+ */
 function resolve(card) {
   const sealed = { sealed: true };
   if (card.type === "text") return { kind: "index", text: card.text ?? "", color: card.color || paperFor(card.who) };
@@ -104,6 +237,12 @@ function resolve(card) {
   if (!doc.testUserPermission(game.user, "LIMITED")) return sealed;
   return { kind: "photo", img: doc.img, title: doc.name, open: () => doc.sheet.render(true) };
 }
+/**
+ * Makes a short preview of a text page for a paper card. Secret sections are left out and Foundry link codes are cleaned up.
+ *
+ * @param {JournalEntryPage|undefined} page The page to preview. Only text pages give a preview.
+ * @returns {string} Up to 150 characters of plain text, ending in … if cut. Empty for other page types.
+ */
 function snippet(page) {
   if (!page || page.type !== "text") return "";
   const d = document.createElement("div");
@@ -111,6 +250,13 @@ function snippet(page) {
   const t = (d.textContent ?? "").replace(/@\w+\[[^\]]*\](?:\{([^}]*)\})?/g, "$1").replace(/\s+/g, " ").trim();
   return t.length > 150 ? t.slice(0, 150) + "…" : t;
 }
+/**
+ * Opens a picture in a pop-out window.
+ *
+ * @param {string} src Path or URL of the picture.
+ * @param {string} title Window title. If empty, "Image" is used.
+ * @returns {void}
+ */
 function showImage(src, title) {
   try { new foundry.applications.apps.ImagePopout({ src, window: { title: title || "Image" } }).render({ force: true }); }
   catch (e) { window.open(src, "_blank"); }
@@ -118,6 +264,14 @@ function showImage(src, title) {
 
 // ---------- dialogs ----------
 const { ApplicationV2, DialogV2 } = foundry.applications.api;
+/**
+ * Shows a small question window and waits for the player to answer.
+ *
+ * @param {string} title The window title.
+ * @param {string} content HTML for the body, normally form fields with a name each.
+ * @param {Array<{action:string,label:string,icon?:string}>} buttons The buttons. The first is the default.
+ * @returns {Promise<Object|null>} The pressed button's action plus every form field by name, for example {action:"ok", label:"..."}. Null if the window was closed without answering.
+ */
 async function ask(title, content, buttons) {
   try {
     return await DialogV2.wait({ window: { title }, position: { width: 420 }, content: `<div class="vcb-dialog">${content}</div>`, rejectClose: false,
@@ -126,18 +280,42 @@ async function ask(title, content, buttons) {
 }
 
 // ---------- the window ----------
+/**
+ * The corkboard window. It shows one board at a time and handles panning, zooming, dragging cards and tying strings. It redraws itself whenever a board, journal or actor changes.
+ */
 class Corkboard extends ApplicationV2 {
   static DEFAULT_OPTIONS = { id: MOD, classes: ["vcb-app"], window: { title: "Corkboard", resizable: true, icon: "fa-solid fa-thumbtack" }, position: { width: 1000, height: 720 } };
   boardId = null; pan = { x: 40, y: 30 }; zoom = 1; busy = false; dirty = false; views = {};
+  /**
+   * The board currently shown in the window.
+   *
+   * @returns {JournalEntry|null} The board, or null if none is selected or it was deleted.
+   */
   get board() { return game.journal.get(this.boardId) ?? null; }
+  /**
+   * Switches the window to another board. It remembers the pan and zoom of the board being left and restores them for the new one. The choice is also remembered in this browser.
+   *
+   * @param {string} id The id of the board journal to show.
+   * @returns {void}
+   */
   setBoard(id) {
     if (this.boardId) this.views[this.boardId] = { pan: { ...this.pan }, zoom: this.zoom };
     this.boardId = id;
     const v = this.views[id]; this.pan = v ? { ...v.pan } : { x: 40, y: 30 }; this.zoom = v?.zoom ?? 1;
     try { localStorage.setItem(`${MOD}.last`, id); } catch (e) { /* ignore */ }
   }
+  /**
+   * Redraws the window after something changed. If the player is in the middle of a drag, the redraw waits until the drag ends.
+   *
+   * @returns {void}
+   */
   refresh() { if (this.busy) this.dirty = true; else if (this.rendered) this.render(); }
 
+  /**
+   * Builds the window's HTML: the toolbar with the board picker and buttons, and the cork surface with all cards and strings. Buttons the user is not allowed to use are left out.
+   *
+   * @returns {Promise<string>} The HTML to show.
+   */
   async _renderHTML() {
     const list = boards();
     if (!this.board || !list.includes(this.board)) {
@@ -160,8 +338,21 @@ ${game.user.isGM ? `<button type="button" data-lock data-tooltip="Players cannot
     return `<div class="vcb-root">${bar}<div class="vcb-view"><div class="vcb-world">${this.worldHTML(b, edit)}</div>${cardsOf(b).length ? "" : `<div class="vcb-empty">The board is empty.<br>Drag a journal, a handout page or a character here, or use the pin button at the top of any journal.</div>`}</div></div>`;
   }
 
+  /**
+   * Finds where a card's red pin is on the board, which is where strings attach.
+   *
+   * @param {Object} c A card with x, y and size.
+   * @returns {{x:number,y:number}} The pin position in board coordinates.
+   */
   pinPoint(c) { return { x: c.x + WIDTHS[c.size ?? 1] / 2, y: c.y + 4 }; }
 
+  /**
+   * Builds the HTML for everything on the cork: strings and their label tags, then the cards. Keeper-approved Party Notes links between pinned journals are drawn as dashed gold strings.
+   *
+   * @param {JournalEntry} b The board to draw.
+   * @param {boolean} edit True if the user may change the board, which shows the card tool buttons.
+   * @returns {string} The HTML for the board's contents.
+   */
   worldHTML(b, edit) {
     const cards = cardsOf(b), byId = Object.fromEntries(cards.map((c) => [c.id, c]));
     const res = Object.fromEntries(cards.map((c) => [c.id, resolve(c)]));
@@ -203,10 +394,35 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
     return `<svg class="vcb-strings">${svg}<path class="vcb-line vcb-temp" d="" stroke="${COLORS.red}" style="display:none"/></svg>${labels}${html}`;
   }
 
+  /**
+   * Applies the current pan and zoom to the cork.
+   *
+   * @param {HTMLElement} root The window's content element.
+   * @returns {void}
+   */
   applyView(root) { const w = root.querySelector(".vcb-world"); if (w) w.style.transform = `translate(${this.pan.x}px, ${this.pan.y}px) scale(${this.zoom})`; }
+  /**
+   * Converts a mouse position on screen to a position on the board, allowing for pan and zoom.
+   *
+   * @param {HTMLElement} view The cork viewport element.
+   * @param {MouseEvent} ev A mouse or pointer event.
+   * @returns {{x:number,y:number}} The position in board coordinates.
+   */
   toWorld(view, ev) { const r = view.getBoundingClientRect(); return { x: (ev.clientX - r.left - view.clientLeft - this.pan.x) / this.zoom, y: (ev.clientY - r.top - view.clientTop - this.pan.y) / this.zoom }; }
+  /**
+   * Marks a drag or string-tying as finished and runs any redraw that was held back during it.
+   *
+   * @returns {void}
+   */
   endBusy() { this.busy = false; if (this.dirty) { this.dirty = false; this.render(); } }
 
+  /**
+   * Puts the built HTML in the window and connects all the controls: board picker, toolbar buttons, panning, zooming, dropping items from the sidebar, hovering to highlight linked cards, moving cards, tying strings from pins, and clicking strings.
+   *
+   * @param {string} result The HTML from _renderHTML.
+   * @param {HTMLElement} content The window's content element.
+   * @returns {void}
+   */
   _replaceHTML(result, content) {
     content.innerHTML = result;
     content.style.cssText += ";padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0";
@@ -259,6 +475,12 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
     });
 
     // focus: hovering a card highlights what it is tied to
+    /**
+     * Highlights a card and everything tied to it, and dims the rest. Called with a falsy value it clears the highlight.
+     *
+     * @param {string|null} id The id of the card to focus on, or null to clear.
+     * @returns {void}
+     */
     const focus = (id) => {
       world.classList.toggle("vcb-focus", !!id);
       world.querySelectorAll(".vcb-on").forEach((e) => e.classList.remove("vcb-on"));
@@ -348,6 +570,15 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
   }
 
   // redraw the strings of one card while it is dragged
+  /**
+   * Redraws the strings attached to a card while it is being dragged, so they follow it without waiting for the save.
+   *
+   * @param {HTMLElement} world The element holding the strings and cards.
+   * @param {JournalEntry} b The board.
+   * @param {string} id The id of the card being dragged.
+   * @param {{x:number,y:number}} pos The card's current position during the drag.
+   * @returns {void}
+   */
   restring(world, b, id, pos) {
     const cards = F(b, "cards") ?? {};
     world.querySelectorAll(`g[data-a="${id}"], g[data-b="${id}"]`).forEach((g) => {
@@ -361,6 +592,12 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
     });
   }
 
+  /**
+   * Sets pan and zoom so every card on the board is in view. With no cards it goes back to the starting view.
+   *
+   * @param {HTMLElement} view The cork viewport element, used for its size.
+   * @returns {void}
+   */
   fit(view) {
     const cards = cardsOf(this.board); if (!cards.length) { this.pan = { x: 40, y: 30 }; this.zoom = 1; return; }
     const x0 = Math.min(...cards.map((c) => c.x)) - 40, y0 = Math.min(...cards.map((c) => c.y)) - 40;
@@ -370,6 +607,13 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
     this.pan = { x: -x0 * this.zoom + (r.width - (x1 - x0) * this.zoom) / 2, y: -y0 * this.zoom + (r.height - (y1 - y0) * this.zoom) / 2 };
   }
 
+  /**
+   * Asks the player for the text of an index card and then pins a new card or changes the existing one.
+   *
+   * @param {Object|null} card The card to edit, or null to make a new one.
+   * @param {{x:number,y:number}} at Where to put a new card, in board coordinates. Not used when editing.
+   * @returns {Promise<void>} Resolves when the board is updated or the player cancels.
+   */
   async editText(card, at) {
     const b = this.board;
     const colors = [["", "My colour"], ["#f1e7cf", "Plain"], ["#fff3a0", "Yellow"], ["#bfe3c0", "Green"], ["#bcd9f5", "Blue"], ["#ffd9a8", "Orange"], ["#f5c6c6", "Pink"]];
@@ -382,6 +626,12 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
     else if (text.trim()) await addCard(b, { type: "text", text, color: res.color, x: Math.round(at.x), y: Math.round(at.y) });
   }
 
+  /**
+   * Shows the Party Notes the player can see that are not already on the board, and pins each one they click.
+   *
+   * @param {{x:number,y:number}} at Where to put the first pinned note. Each following note is placed a little lower and to the right.
+   * @returns {Promise<void>} Resolves once the picker window is open.
+   */
   async pickNote(at) {
     const b = this.board, have = new Set(cardsOf(b).filter((c) => c.type === "note").map((c) => c.noteId));
     const notes = allNotes().filter((n) => !have.has(n.id));
@@ -396,6 +646,12 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
     }));
   }
 
+  /**
+   * Lets the player choose a picture from the server and pins it as a photo card with an optional caption. Only shown to users allowed to browse server files.
+   *
+   * @param {{x:number,y:number}} at Where to put the card, in board coordinates.
+   * @returns {void}
+   */
   pickImage(at) {
     const b = this.board;
     const FP = foundry.applications.apps.FilePicker.implementation;
@@ -405,12 +661,25 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
     } }).render({ force: true });
   }
 
+  /**
+   * Lists all Party Notes the player can see about one journal.
+   *
+   * @param {string} entryUuid The uuid of the journal.
+   * @returns {void}
+   */
   showNotes(entryUuid) {
     const notes = allNotes().filter((n) => n.uuid === entryUuid);
     const wall = notes.map((n) => `<div class="vcb-pick" style="background:${paperFor(n.who)};cursor:default;max-height:none"><div style="font-size:10px;opacity:.75">${esc(n.pageName ?? "")}</div>${n.html}<div style="font-size:10px;text-align:right"><b>${esc(n.who)}</b> · ${esc(n.date)}</div></div>`).join("");
     new DialogV2({ window: { title: `Party Notes on ${notes[0]?.entry.name ?? "this journal"}` }, position: { width: 720 }, content: `<div class="vcb-notewall">${wall}</div>`, buttons: [{ action: "close", label: "Close" }] }).render({ force: true });
   }
 
+  /**
+   * Asks for a string's label and colour. For an existing string it also offers to cut it, or to suggest the two journals as Related, which sends the suggestion to the Keeper through the Party Notes macro.
+   *
+   * @param {Object|null} s The string to edit, or null to tie a new one.
+   * @param {{a:string,b:string}} ends For a new string, the ids of the two cards to join. Not used when editing.
+   * @returns {Promise<void>} Resolves when the board is updated or the player cancels.
+   */
   async editString(s, ends) {
     const b = this.board;
     const cards = F(b, "cards") ?? {};
@@ -437,6 +706,11 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
     else { const id = foundry.utils.randomID(); await b.update({ [`flags.${MOD}.strings.${id}`]: { id, a: ends.a, b: ends.b, label, color: res.color || "red", by: game.user.id, who: who(game.user), ts: Date.now() } }); }
   }
 
+  /**
+   * Keeper only. Creates a new board that only Keepers can see, and switches to it.
+   *
+   * @returns {Promise<void>} Resolves when the board is created.
+   */
   async newKeeperBoard() {
     const res = await ask("New Keeper board", `<label>Board name</label><input type="text" name="name" value="Keeper Board" autofocus><p>Only Keepers can see it. Change its ownership in the Journal sidebar to share it.</p>`, [{ action: "ok", label: "Create" }, { action: "cancel", label: "Cancel" }]);
     if (res?.action !== "ok" || !String(res.name).trim()) return;
@@ -446,6 +720,13 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
   }
 }
 
+/**
+ * Adds a card to a board and gives it a new id. Each card is saved under its own key so two players adding at once do not overwrite each other.
+ *
+ * @param {JournalEntry} board The board to add to.
+ * @param {Object} data The card's own fields: type, x, y, and the type-specific fields such as uuid, text, color, src, caption, box or noteId.
+ * @returns {Promise<string>} The id of the new card.
+ */
 async function addCard(board, data) {
   const id = foundry.utils.randomID();
   await board.update({ [`flags.${MOD}.cards.${id}`]: { id, size: 1, stamp: "", by: game.user.id, who: who(game.user), ts: Date.now(), ...data } });
@@ -453,7 +734,18 @@ async function addCard(board, data) {
 }
 
 // ---------- opening, and pinning from a journal ----------
+/**
+ * Finds the corkboard window if it is open.
+ *
+ * @returns {Corkboard|undefined} The open window.
+ */
 const app = () => foundry.applications.instances.get(MOD);
+/**
+ * Opens the corkboard window, creating it if needed, and brings it to the front. This is the function the toolbar button, Shift+B, the journal sidebar button and the Investigation tile all use.
+ *
+ * @param {string} [optional] boardId The id of the board to show. If left out, the last board used, or the first one available, is shown.
+ * @returns {Promise<Corkboard>} The open window.
+ */
 async function open(boardId) {
   let a = app();
   if (!a) a = new Corkboard();
@@ -462,6 +754,12 @@ async function open(boardId) {
   a.bringToFront?.();
   return a;
 }
+/**
+ * Pins the journal or page the player is reading. Used by the pushpin button in every journal window's title bar. It asks what to pin and which board, then opens the board.
+ *
+ * @param {ApplicationV2} sheet The open journal window. Its current page is offered as well as the whole journal.
+ * @returns {Promise<void>} Resolves when the card is added or the player cancels.
+ */
 async function pinFromSheet(sheet) {
   const entry = sheet.document;
   const page = sheet.pageId ? entry.pages.get(sheet.pageId) : null;
@@ -488,6 +786,12 @@ async function pinFromSheet(sheet) {
   const pos = sheet.position;
   if (pos && !a) w.setPosition({ left: Math.max(0, Math.min(pos.left + pos.width + 8, window.innerWidth - 700)), top: pos.top });
 }
+/**
+ * Opens the Party Notes macro's window for the journal being read. Used by the Party Note button in journal title bars.
+ *
+ * @param {ApplicationV2} sheet The open journal window.
+ * @returns {*} The result of opening the Party Notes window, or nothing if the macro is missing, in which case a warning is shown.
+ */
 function partyNote(sheet) {
   if (globalThis.__pnOpen) return globalThis.__pnOpen(sheet);
   const m = game.macros.getName("Party Notes");
@@ -497,22 +801,55 @@ function partyNote(sheet) {
 }
 
 // ---------- hooks ----------
+/**
+ * The functions other code (for example the Investigation tile macro) may call, also available as VoidCorkboard.
+ * @type {{open: function(string=): Promise<Corkboard>, pinFromSheet: function(ApplicationV2): Promise<void>, ensureSetup: function(): Promise<void>}}
+ */
 const api = { open, pinFromSheet, ensureSetup };
 globalThis.VoidCorkboard = api;
+/**
+ * Runs once as Foundry starts. Makes the module's functions available to other code (the Investigation tile macro uses them)
+ * and adds the Shift+B shortcut that opens the corkboard.
+ *
+ * @returns {void}
+ */
 Hooks.once("init", () => {
   const m = game.modules.get(MOD); if (m) m.api = api;
   game.keybindings.register(MOD, "open", { name: "Open the corkboard", editable: [{ key: "KeyB", modifiers: ["Shift"] }], onDown: () => { open(); return true; } });
 });
+/**
+ * Runs once the world has loaded. Creates the Corkboards folder, the Party Board and the private boards if they are missing.
+ *
+ * @returns {Promise<void>}
+ */
 Hooks.once("ready", async () => {
   try { await ensureSetup(); } catch (e) { console.error(MOD, e); }
 });
 // keep every open board live
+/**
+ * Redraws the open corkboard after a change. Several changes arriving together cause only one redraw.
+ * It is attached below to every change that can affect what a card shows (journals, pages, actors, items).
+ *
+ * @returns {void}
+ */
 const refresh = foundry.utils.debounce(() => app()?.refresh(), 60);
 for (const h of ["updateJournalEntry", "createJournalEntry", "deleteJournalEntry", "updateJournalEntryPage", "createJournalEntryPage", "deleteJournalEntryPage", "updateActor", "updateItem"]) Hooks.on(h, refresh);
 // a new player joined: make sure they have a board
+/**
+ * Runs when a new user is added to the world, so the new player gets a private board.
+ *
+ * @returns {void}
+ */
 Hooks.on("createUser", () => ensureSetup().catch(() => {}));
 
 // buttons on every journal window; opening a board journal opens the corkboard instead
+/**
+ * Runs every time a window opens. For a journal window it adds the pushpin ("Pin to corkboard") and Party Note buttons to the title bar.
+ * If the journal is itself a board, it opens the corkboard window instead of the plain journal.
+ *
+ * @param {ApplicationV2} sheet The window that was drawn. Only journal windows are changed.
+ * @returns {void}
+ */
 Hooks.on("renderApplicationV2", (sheet) => {
   const doc = sheet.document;
   if (!(doc instanceof JournalEntry) || sheet.id === MOD) return;
@@ -526,12 +863,25 @@ Hooks.on("renderApplicationV2", (sheet) => {
   if (globalThis.__pnOpen || game.macros.getName("Party Notes")) header.insertBefore(mk("fa-regular fa-note-sticky", "Party Note", () => partyNote(sheet)), before);
 });
 // corkboard button in the left toolbar and at the top of the Journal sidebar
+/**
+ * Runs when the left toolbar is built. Adds the pushpin button that opens the corkboard.
+ *
+ * @param {Object} controls The toolbar groups, as built by Foundry.
+ * @returns {void}
+ */
 Hooks.on("getSceneControlButtons", (controls) => {
   try {
     const tool = { name: "corkboard", title: "Corkboard", icon: "fa-solid fa-thumbtack", button: true, visible: true, order: 99, onChange: () => open() };
     for (const key of ["tokens", "notes"]) { const g = Array.isArray(controls) ? controls.find((c) => c.name === key || c.name === "token") : controls[key]; if (!g) continue; if (Array.isArray(g.tools)) g.tools.push({ ...tool, onClick: () => open() }); else g.tools.corkboard = { ...tool }; }
   } catch (e) { console.warn(MOD, e); }
 });
+/**
+ * Runs when the Journal sidebar is drawn. Adds a Corkboard button at its top.
+ *
+ * @param {Application} dir The Journal sidebar.
+ * @param {HTMLElement|jQuery} html The sidebar's content.
+ * @returns {void}
+ */
 Hooks.on("renderJournalDirectory", (dir, html) => {
   const el = html instanceof HTMLElement ? html : html?.[0]; if (!el || el.querySelector(".vcb-open")) return;
   const target = el.querySelector(".header-actions") ?? el.querySelector(".directory-header");
