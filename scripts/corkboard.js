@@ -444,6 +444,14 @@ ${edit ? `<div class="vcb-tools"><a data-act="stamp" data-tooltip="Stamp: questi
       else this.pickImage(at);
     }));
 
+    // ping: Shift+click anywhere on the cork shows a pulsing marker to everyone looking at this board
+    view.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0 || !ev.shiftKey) return;
+      ev.preventDefault(); ev.stopPropagation();
+      const at = this.toWorld(view, ev);
+      sendPing(b.id, at.x, at.y);
+    }, true);
+
     // pan and zoom
     view.addEventListener("pointerdown", (ev) => {
       if (ev.button !== 0 && ev.button !== 1) return;
@@ -801,6 +809,37 @@ function partyNote(sheet) {
 }
 
 // ---------- hooks ----------
+// ---------- ping ----------
+/**
+ * Draws a pulsing marker on the open board if it is showing the given board. Removes itself after a few seconds.
+ *
+ * @param {{boardId:string,x:number,y:number,color:string,name:string}} p Where, on which board, and whose ping it is.
+ * @returns {void}
+ */
+function showPing(p) {
+  const a = app();
+  if (!a?.rendered || a.boardId !== p.boardId) return;
+  const world = a.element?.querySelector(".vcb-world"); if (!world) return;
+  const el = document.createElement("div"); el.className = "vcb-ping";
+  el.style.cssText = `left:${Number(p.x)}px;top:${Number(p.y)}px;--c:${/^#[0-9a-f]{3,8}$/i.test(p.color) ? p.color : "#ff3030"}`;
+  el.innerHTML = `<i></i><i></i><i></i><b>${esc(p.name)}</b>`;
+  world.append(el); setTimeout(() => el.remove(), 3200);
+}
+/**
+ * Shows a ping here and tells every other connected player's open copy of the board to show it too. No Keeper needed; players relay it directly.
+ *
+ * @param {string} boardId The board journal id.
+ * @param {number} x Board x position.
+ * @param {number} y Board y position.
+ * @returns {void}
+ */
+function sendPing(boardId, x, y) {
+  const p = { boardId, x, y, color: game.user.color?.css ?? String(game.user.color ?? "#ff3030"), name: who(game.user) };
+  showPing(p);
+  game.socket.emit(`module.${MOD}`, { type: "ping", ...p });
+}
+Hooks.once("ready", () => game.socket.on(`module.${MOD}`, (d) => { if (d?.type === "ping") showPing(d); }));
+
 /**
  * The functions other code (for example the Investigation tile macro) may call, also available as VoidCorkboard.
  * @type {{open: function(string=): Promise<Corkboard>, pinFromSheet: function(ApplicationV2): Promise<void>, ensureSetup: function(): Promise<void>}}
